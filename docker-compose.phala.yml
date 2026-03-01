@@ -16,6 +16,7 @@ services:
 
   app:
     image: ${DOCKER_IMAGE}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       db:
