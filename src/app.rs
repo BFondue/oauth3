@@ -128,12 +128,6 @@ async fn seed_providers_from_env(state: &AppState) -> anyhow::Result<()> {
 
     // Process each discovered provider
     for (provider_id, fields) in providers {
-        // Skip if already exists in DB
-        if state.accounts.get_provider(&provider_id).await?.is_some() {
-            tracing::debug!("Provider '{}' already exists, skipping", provider_id);
-            continue;
-        }
-
         // Required fields
         let Some(provider_type) = fields.get("type") else {
             tracing::warn!("Provider '{}' missing TYPE field, skipping", provider_id);
