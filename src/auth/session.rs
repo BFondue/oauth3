@@ -73,3 +73,53 @@ pub(crate) fn is_https() -> bool {
     // Use environment hint; default to false for local dev
     matches!(std::env::var("APP_FORCE_SECURE").as_deref(), Ok("1") | Ok("true") | Ok("yes"))
 }
+
+/// Create a short-lived HMAC-signed session token for cross-domain auth.
+/// Format: base64url(user_id:expiry_unix).hex(HMAC-SHA256(key, payload))
+pub fn create_session_token(config: &crate::config::AppConfig, user_id: &str) -> Option<String> {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let key_bytes = crate::config::decode_cookie_key(&config.server.cookie_key_base64).ok()?;
+    let exp = (time::OffsetDateTime::now_utc() + Duration::minutes(10)).unix_timestamp();
+    let payload = format!("{}:{}", user_id, exp);
+    let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.as_bytes());
+
+    let mut mac = HmacSha256::new_from_slice(&key_bytes).ok()?;
+    mac.update(payload_b64.as_bytes());
+    let mac_hex = hex::encode(mac.finalize().into_bytes());
+
+    Some(format!("{}.{}", payload_b64, mac_hex))
+}
+
+/// Verify an HMAC-signed session token and return the user_id if valid.
+/// Uses constant-time comparison via HMAC verify_slice to prevent timing attacks.
+pub fn verify_session_token(config: &crate::config::AppConfig, token: &str) -> Option<String> {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+
+    let (payload_b64, mac_hex) = token.split_once('.')?;
+    let key_bytes = crate::config::decode_cookie_key(&config.server.cookie_key_base64).ok()?;
+
+    // Recompute HMAC and verify using constant-time comparison
+    let mut mac = HmacSha256::new_from_slice(&key_bytes).ok()?;
+    mac.update(payload_b64.as_bytes());
+
+    let provided_mac = hex::decode(mac_hex).ok()?;
+    mac.verify_slice(&provided_mac).ok()?;
+
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let payload_str = String::from_utf8(payload).ok()?;
+    let (user_id, exp_str) = payload_str.rsplit_once(':')?;
+    let exp: i64 = exp_str.parse().ok()?;
+
+    if time::OffsetDateTime::now_utc().unix_timestamp() > exp {
+        return None;
+    }
+
+    Some(user_id.to_string())
+}
